@@ -1,17 +1,18 @@
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon
 
-# Konfigurasjon av siden
-st.set_page_config(page_title="Geoteknisk Bæreevne med Eksentrisitet - EC7", layout="wide")
+# Konfigurasjon
+st.set_page_config(page_title="Geoteknisk Bæreevne & Bruddfigur", layout="wide")
 
-st.title("🏗️ Bæreevneanalyse for stripefundament")
-st.markdown("Basert på Eurokode 7 (NS-EN 1997-1), dimensjonerende kontroll med eksentrisk last.")
+st.title("🏗️ Bæreevneanalyse med Bruddfigur")
+st.markdown("Beregning av bæreevne og visualisering av kritisk skjærflate iht. EC7.")
 
 # --- SIDEBAR: INPUT ---
 st.sidebar.header("Inndataparametere")
 
-# Materialparametere
+# Jordparametere
 st.sidebar.subheader("Jordparametere")
 phi_k = st.sidebar.slider("Karakteristisk friksjonsvinkel (φ_k)", 20.0, 45.0, 32.0, 0.5)
 attraksjon = st.sidebar.number_input("Attraksjon (a) [kN/m2]", value=5.0, step=1.0)
@@ -21,100 +22,112 @@ gamma_m = st.sidebar.number_input("Materialfaktor (γ_m)", value=1.25, step=0.05
 # Geometri og last
 st.sidebar.subheader("Geometri og Last")
 V_k = st.sidebar.number_input("Vertikallast V (kN/m)", value=350.0, step=10.0)
-B = st.sidebar.number_input("Bredde B (m)", value=2.0, min_value=0.1, step=0.1)
-D = st.sidebar.number_input("Fundamenteringsdybde D (m)", value=1.0, min_value=0.0, step=0.1)
+B = st.sidebar.number_input("Bredde B (m)", value=2.0, min_value=0.5, step=0.1)
+D = st.sidebar.number_input("Dybde D (m)", value=1.0, min_value=0.0, step=0.1)
 
 # Eksentrisitet
-st.sidebar.subheader("Eksentrisitet")
-e = st.sidebar.slider("Eksentrisitet e (m)", -B/2.01, B/2.01, 0.0, 0.01, 
-                      help="Horisontal forskyvning fra fundamentets senterlinje. Begrenset til innenfor fundamentbredden.")
+e = st.sidebar.slider("Eksentrisitet e (m)", -B/3, B/3, 0.0, 0.01)
 
-# --- BEREGNINGER med eksentrisitet ---
-# Effektiv bredde B' for eksentrisk last
-B_prime = B - 2 * abs(e)
-
-# 1. Dimensjonerende friksjon
+# --- BEREGNINGER ---
 phi_d_rad = np.arctan(np.tan(np.radians(phi_k)) / gamma_m)
 phi_d_deg = np.degrees(phi_d_rad)
 
-# 2. Bæreevnefaktorer (EC7-1 Annex D) basert på phi_d
+# Effektiv bredde
+B_prime = B - 2 * abs(e)
+
+# Bæreevnefaktorer
 Nq = np.exp(np.pi * np.tan(phi_d_rad)) * (np.tan(np.radians(45) + phi_d_rad/2))**2
 Ngamma = 2 * (Nq - 1) * np.tan(phi_d_rad)
 
-# 3. Effektivt overleiringstrykk ved underkant fundament
-q_sur = gamma * D
-
-# 4. Dimensjonerende bæreevne (sigma_d) på effektiv flate B'
-# Formel: sigma_d = (q_sur + a)*Nq + 0.5*gamma*B'*Ngamma - a
-sigma_d = (q_sur + attraksjon) * Nq + 0.5 * gamma * B_prime * Ngamma - attraksjon
-
-# 5. Faktisk grunntrykk (gjennomsnittlig trykk på effektiv flate)
+sigma_d = (gamma * D + attraksjon) * Nq + 0.5 * gamma * B_prime * Ngamma - attraksjon
 q_faktisk = V_k / B_prime
 utnyttelse = (q_faktisk / sigma_d) * 100
 
-# --- HOVEDPANEL: VISNING ---
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Grunntrykk (q_fakt)", f"{q_faktisk:.1f} kN/m²")
-col2.metric("Bæreevne (σ_d)", f"{sigma_d:.1f} kN/m²")
-col3.metric("Effektiv bredde (B')", f"{B_prime:.2f} m")
+# --- GEOMETRI FOR SKJÆRFLATE (Prandtl) ---
+# Vinkler
+alpha_1 = 45 + phi_d_deg/2  # Aktiv utgangsvinkel
+alpha_2 = 45 - phi_d_deg/2  # Passiv endevinkel
 
-if utnyttelse <= 100:
-    col4.success(f"Utnyttelse: {utnyttelse:.1f}%")
-else:
-    col4.error(f"Utnyttelse: {utnyttelse:.1f}%")
+# Startpunkt for bruddfigur (venstre eller høyre side av B')
+side = 1 if e >= 0 else -1
+x_start = e - (side * B_prime/2)
+x_end_base = e + (side * B_prime/2)
 
-# --- VISUALISERING (Matplotlib) ---
-st.subheader("Fundamentskisse")
+# Koordinater for Sone 1 (Aktiv kile)
+p1 = [x_start, -D]
+p2 = [x_end_base, -D]
+p3 = [x_start + (side * B_prime * np.cos(np.radians(alpha_1)) * np.cos(np.radians(phi_d_deg)) / np.sin(np.radians(90+phi_d_deg))), 
+      -D - (B_prime * np.sin(np.radians(alpha_1)) * np.cos(np.radians(phi_d_deg)) / np.sin(np.radians(90+phi_d_deg)))]
 
-fig, ax = plt.subplots(figsize=(10, 5))
+# Sone 2 (Logaritmisk spiral) og Sone 3 (Passiv kile)
+# Forenklet beregning for visualisering av influensområde
+theta = np.linspace(0, np.pi/2 + np.radians(phi_d_deg), 20)
+r0 = B_prime / (2 * np.cos(np.radians(alpha_1)))
+spiral_pts = []
+for t in theta:
+    r = r0 * np.exp(t * np.tan(phi_d_rad))
+    px = x_end_base + (side * r * np.cos(np.radians(alpha_1) - t))
+    py = -D - (r * np.sin(np.radians(alpha_1) - t))
+    spiral_pts.append([px, py])
 
-# Terrenget
-ax.axhline(0, color='brown', lw=2)
+# Finn ytterpunktet på terreng
+exit_x = x_end_base + side * (B_prime * np.exp((np.pi/2) * np.tan(phi_d_rad)) * np.tan(np.radians(45 + phi_d_deg/2)))
+dist_fra_kant = abs(exit_x - (side * B/2))
+max_dybde = abs(min([p[1] for p in spiral_pts])) - D
 
-# Fundament (rektangel), sentrert rundt x=0
-rect = plt.Rectangle((-B/2, -D), B, 0.4, color='grey', alpha=0.8, label="Betongfundament")
-ax.add_patch(rect)
+# --- VISNING ---
+col1, col2, col3 = st.columns(3)
+col1.metric("Bæreevne (σ_d)", f"{sigma_d:.1f} kN/m²")
+col2.metric("Utnyttelse", f"{utnyttelse:.1f}%")
+col3.metric("B' (effektiv)", f"{B_prime:.2f} m")
 
-# Lastpil - flyttet til posisjon x = e
-ax.annotate('', xy=(e, -D + 0.4), xytext=(e, 1.5),
-            arrowprops=dict(facecolor='red', shrink=0.05, width=3, headwidth=10))
-ax.text(e + 0.1, 1.0, f"V = {V_k:.1f} kN/m", color='red', fontweight='bold')
+# FIGUR
+st.subheader("Fundamentskisse med Bruddfigur")
+fig, ax = plt.subplots(figsize=(12, 6))
 
-# Vis eksentrisitet hvis e != 0
-if abs(e) > 0.01:
-    ax.axvline(0, color='black', linestyle='--', linewidth=0.8, alpha=0.5)
-    ax.plot([0, e], [1.5, 1.5], color='black', marker='|', markersize=5)
-    ax.text(e/2, 1.6, f"e={e:.2f}m", color='black', fontsize=9, ha='center')
+# Jord / Terreng
+ax.fill_between([-B*3, B*5], -10, 0, color='#f4ead5', zorder=1)
+ax.axhline(0, color='brown', lw=3, zorder=5)
 
-# --- Dimensjonslinjer B og D ---
-dim_offset = 0.3 # Forstyrrelse for dimensjonslinjene
+# Bruddfigur (Skjærflate)
+pts = [p1, p3] + spiral_pts + [[exit_x, 0], [x_start, 0]]
+failure_zone = Polygon(pts, closed=True, facecolor='orange', alpha=0.3, edgecolor='red', linestyle='--', label="Kritisk skjærflate")
+ax.add_patch(failure_zone)
 
-# Dybde D
-y_top_d, y_bot_d = 0, -D
-x_pos_d = -B/2 - dim_offset
-ax.plot([x_pos_d, x_pos_d], [y_top_d, y_bot_d], color='black', marker='_', markersize=8, linewidth=1)
-ax.text(x_pos_d - 0.1, (y_top_d + y_bot_d)/2, f"D = {D:.1f} m", 
-        color='black', fontsize=10, ha='right', va='center', rotation=90)
+# Fundament
+foundation = plt.Rectangle((-B/2, -D), B, 0.4, color='grey', alpha=0.9, zorder=10, label="Fundament")
+ax.add_patch(foundation)
 
-# Bredde B
-x_left_b, x_right_b = -B/2, B/2
-y_pos_b = -D - dim_offset
-ax.plot([x_left_b, x_right_b], [y_pos_b, y_pos_b], color='black', marker='|', markersize=8, linewidth=1)
-ax.text((x_left_b + x_right_b)/2, y_pos_b - 0.1, f"B = {B:.1f} m", 
-        color='black', fontsize=10, ha='center', va='top')
+# Lastpil (Eksentrisk)
+ax.annotate('', xy=(e, -D+0.4), xytext=(e, 2), arrowprops=dict(facecolor='red', width=4))
+ax.text(e, 2.2, f"V={V_k} kN/m", ha='center', color='red', weight='bold')
 
+# Dimensjonslinjer
+ax.plot([-B/2, B/2], [-D-0.5, -D-0.5], 'k|-') # B
+ax.text(0, -D-0.8, f"B = {B}m", ha='center')
+ax.plot([-B/2-0.5, -B/2-0.5], [-D, 0], 'k|-') # D
+ax.text(-B/2-0.7, -D/2, f"D = {D}m", va='center', rotation=90)
 
-# Akser og styling
-ax.set_xlim(-B*2, B*2)
-ax.set_ylim(-D-1.5, 3)
+# Styling
+ax.set_xlim(-B*2, B*4 if e>=0 else B*2)
+ax.set_ylim(-D - max_dybde - 1, 3)
 ax.set_aspect('equal')
 ax.axis('off')
 st.pyplot(fig)
 
-# --- TEKNISK OPPSUMMERING ---
-with st.expander("Se beregningsdetaljer"):
-    st.write(f"**Effektiv fundamentbredde B':** {B_prime:.2f} m")
-    st.write(f"**Dimensjonerende tan(φ_d):** {np.tan(phi_d_rad):.3f}")
-    st.write(f"**Nq:** {Nq:.2f}")
-    st.write(f"**Nγ:** {Ngamma:.2f}")
-    st.latex(r"\sigma_d = (q_{sur} + a)N_q + \frac{1}{2}\gamma B' N_\gamma - a")
+# --- RESULTATTABELL (Slik bildet ditt viste) ---
+st.subheader("BELIGGENHET AV KRITISK SKJÆRFLATE:")
+res_col1, res_col2 = st.columns(2)
+
+with res_col1:
+    st.write(f"**Avstand fra fundamentkant:** {dist_fra_kant:.2f} m")
+    st.write(f"**Dybde under fundamentnivå:** {max_dybde:.2f} m")
+
+with res_col2:
+    st.write(f"**Aktiv utgangsvinkel:** {alpha_1:.1f} °")
+    st.write(f"**Passiv endevinkel:** {alpha_2:.1f} °")
+
+with st.expander("Tekniske detaljer & Formler"):
+    st.latex(r"B' = B - 2e")
+    st.latex(r"N_q = e^{\pi \tan \phi_d} \tan^2(45 + \phi_d/2)")
+    st.write("Skjærflaten er beregnet som en kombinasjon av Rankine-kiler og en logaritmisk spiral (Prandtl-mekanismen).")
